@@ -3,16 +3,14 @@ package repository
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/AswinPopy/dodo-payment-gateway/internal/model"
 )
 
 type IdempotencyRepository struct {
-	db *pgxpool.Pool
+	db DBTX
 }
 
-func NewIdempotencyRepository(db *pgxpool.Pool) *IdempotencyRepository {
+func NewIdempotencyRepository(db DBTX) *IdempotencyRepository {
 	return &IdempotencyRepository{
 		db: db,
 	}
@@ -28,9 +26,10 @@ func (r *IdempotencyRepository) Create(
 			business_id,
 			idempotency_key,
 			invoice_id,
+			request_hash,
 			payment_attempt_id
 		)
-		VALUES ($1, $2, $3, $4, $5)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING created_at
 	`
 
@@ -41,6 +40,7 @@ func (r *IdempotencyRepository) Create(
 		key.BusinessID,
 		key.IdempotencyKey,
 		key.InvoiceID,
+		key.RequestHash,
 		key.PaymentAttemptID,
 	).Scan(&key.CreatedAt)
 }
@@ -56,6 +56,7 @@ func (r *IdempotencyRepository) GetByKey(
 			business_id,
 			idempotency_key,
 			invoice_id,
+			request_hash,
 			payment_attempt_id,
 			created_at
 		FROM idempotency_keys
@@ -75,6 +76,7 @@ func (r *IdempotencyRepository) GetByKey(
 		&key.BusinessID,
 		&key.IdempotencyKey,
 		&key.InvoiceID,
+		&key.RequestHash,
 		&key.PaymentAttemptID,
 		&key.CreatedAt,
 	)

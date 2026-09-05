@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/AswinPopy/dodo-payment-gateway/internal/httperr"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/service"
 )
 
@@ -26,9 +27,7 @@ func (h *BusinessHandler) CreateBusiness(c *gin.Context) {
 	var req createBusinessRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "name is required",
-		})
+		httperr.BadRequest(c, "name is required")
 		return
 	}
 
@@ -37,13 +36,9 @@ func (h *BusinessHandler) CreateBusiness(c *gin.Context) {
 		req.Name,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "failed to create business",
-		})
+		httperr.Internal(c)
 		return
 	}
 
 	c.JSON(http.StatusCreated, business)
 }
-
-//aa1e5c14-0fcc-46be-85f6-7c5262c03087

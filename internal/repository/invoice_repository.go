@@ -3,16 +3,14 @@ package repository
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/AswinPopy/dodo-payment-gateway/internal/model"
 )
 
 type InvoiceRepository struct {
-	db *pgxpool.Pool
+	db DBTX
 }
 
-func NewInvoiceRepository(db *pgxpool.Pool) *InvoiceRepository {
+func NewInvoiceRepository(db DBTX) *InvoiceRepository {
 	return &InvoiceRepository{
 		db: db,
 	}
@@ -92,6 +90,49 @@ func (r *InvoiceRepository) GetByID(
 	return invoice, nil
 }
 
+func (r *InvoiceRepository) GetByIDForUpdate(
+	ctx context.Context,
+	id string,
+) (*model.Invoice, error) {
+	query := `
+		SELECT
+			id,
+			business_id,
+			customer_id,
+			currency,
+			amount,
+			status,
+			created_at,
+			updated_at
+		FROM invoices
+		WHERE id = $1
+		FOR UPDATE
+	`
+
+	invoice := &model.Invoice{}
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		id,
+	).Scan(
+		&invoice.ID,
+		&invoice.BusinessID,
+		&invoice.CustomerID,
+		&invoice.Currency,
+		&invoice.Amount,
+		&invoice.Status,
+		&invoice.CreatedAt,
+		&invoice.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return invoice, nil
+}
+
 func (r *InvoiceRepository) UpdateStatus(
 	ctx context.Context,
 	id string,
@@ -109,6 +150,29 @@ func (r *InvoiceRepository) UpdateStatus(
 		ctx,
 		query,
 		status,
+		id,
+	)
+
+	return err
+}
+
+func (r *InvoiceRepository) MarkPaidIfOpen(
+	ctx context.Context,
+	id string,
+) error {
+	query := `
+		UPDATE invoices
+		SET
+			status = $1,
+			updated_at = NOW()
+		WHERE id = $2
+		  AND status IN ('DRAFT', 'OPEN')
+	`
+
+	_, err := r.db.Exec(
+		ctx,
+		query,
+		model.InvoiceStatusPaid,
 		id,
 	)
 

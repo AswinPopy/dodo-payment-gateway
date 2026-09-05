@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/AswinPopy/dodo-payment-gateway/internal/httperr"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/middleware"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/service"
 )
@@ -27,25 +28,19 @@ func (h *InvoiceHandler) CreateInvoice(c *gin.Context) {
 	var req createInvoiceRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "customer_id, currency and amount are required",
-		})
+		httperr.BadRequest(c, "customer_id, currency and amount are required")
 		return
 	}
 
 	businessID, exists := c.Get(middleware.BusinessIDKey)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "business context missing",
-		})
+		httperr.Unauthorized(c, "business context missing")
 		return
 	}
 
 	businessIDString, ok := businessID.(string)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "invalid business context",
-		})
+		httperr.Internal(c)
 		return
 	}
 
@@ -59,33 +54,52 @@ func (h *InvoiceHandler) CreateInvoice(c *gin.Context) {
 
 	if err != nil {
 		switch err.Error() {
-		case "business not found":
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "business not found",
-			})
-		case "customer not found":
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "customer not found",
-			})
+		case "business not found", "customer not found":
+			httperr.NotFound(c, err.Error())
 		case "customer does not belong to business":
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "customer does not belong to business",
-			})
-		case "amount must be greater than zero":
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "amount must be greater than zero",
-			})
-		case "currency is required":
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "currency is required",
-			})
+			httperr.Forbidden(c, err.Error())
+		case "amount must be greater than zero", "currency is required":
+			httperr.BadRequest(c, err.Error())
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "failed to create invoice",
-			})
+			httperr.Internal(c)
 		}
 		return
 	}
 
 	c.JSON(http.StatusCreated, invoice)
+}
+
+func (h *InvoiceHandler) GetInvoice(c *gin.Context) {
+	invoiceID := c.Param("id")
+
+	businessID, exists := c.Get(middleware.BusinessIDKey)
+	if !exists {
+		httperr.Unauthorized(c, "business context missing")
+		return
+	}
+
+	businessIDString, ok := businessID.(string)
+	if !ok {
+		httperr.Internal(c)
+		return
+	}
+
+	invoice, err := h.service.GetInvoice(
+		c.Request.Context(),
+		businessIDString,
+		invoiceID,
+	)
+	if err != nil {
+		switch err.Error() {
+		case "invoice not found":
+			httperr.NotFound(c, err.Error())
+		case "invoice does not belong to business":
+			httperr.Forbidden(c, err.Error())
+		default:
+			httperr.Internal(c)
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, invoice)
 }

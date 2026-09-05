@@ -3,12 +3,18 @@ package database
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const defaultDSN = "postgres://dodo:dodo@localhost:5432/dodo_payments?sslmode=disable"
+
 func NewPostgresPool(ctx context.Context) (*pgxpool.Pool, error) {
-	dsn := "postgres://postgres:postgres@localhost:5433/dodo_psp?sslmode=disable"
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = defaultDSN
+	}
 
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

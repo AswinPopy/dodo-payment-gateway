@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/AswinPopy/dodo-payment-gateway/internal/httperr"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/middleware"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/service"
 )
@@ -19,38 +21,40 @@ func NewPaymentHandler(service *service.PaymentService) *PaymentHandler {
 	}
 }
 
+type payInvoiceRequest struct {
+	CardToken string `json:"card_token" binding:"required"`
+}
+
 func (h *PaymentHandler) PayInvoice(c *gin.Context) {
 	invoiceID := c.Param("id")
 
 	if invoiceID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invoice id is required",
-		})
+		httperr.BadRequest(c, "invoice id is required")
+		return
+	}
+
+	var req payInvoiceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httperr.BadRequest(c, "card_token is required")
 		return
 	}
 
 	idempotencyKey := c.GetHeader("Idempotency-Key")
 
 	if idempotencyKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Idempotency-Key header is required",
-		})
+		httperr.BadRequest(c, "Idempotency-Key header is required")
 		return
 	}
 
 	businessID, exists := c.Get(middleware.BusinessIDKey)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "business context missing",
-		})
+		httperr.Unauthorized(c, "business context missing")
 		return
 	}
 
 	businessIDString, ok := businessID.(string)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "invalid business context",
-		})
+		httperr.Internal(c)
 		return
 	}
 
@@ -59,38 +63,63 @@ func (h *PaymentHandler) PayInvoice(c *gin.Context) {
 		businessIDString,
 		invoiceID,
 		idempotencyKey,
+		req.CardToken,
 	)
 
 	if err != nil {
-		switch err.Error() {
-		case "invoice not found":
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "invoice not found",
-			})
-
-		case "invoice does not belong to business":
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "invoice does not belong to business",
-			})
-
-		case "invoice already paid":
-			c.JSON(http.StatusConflict, gin.H{
-				"error": "invoice already paid",
-			})
-
-		case "invoice is void":
-			c.JSON(http.StatusConflict, gin.H{
-				"error": "invoice is void",
-			})
-
-		default:
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "failed to process payment",
-			})
-		}
-
+		writePaymentError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, attempt)
+}
+
+func (h *PaymentHandler) GetPaymentAttempt(c *gin.Context) {
+	attemptID := c.Param("id")
+
+	businessID, exists := c.Get(middleware.BusinessIDKey)
+	if !exists {
+		httperr.Unauthorized(c, "business context missing")
+		return
+	}
+
+	businessIDString, ok := businessID.(string)
+	if !ok {
+		httperr.Internal(c)
+		return
+	}
+
+	attempt, err := h.service.GetPaymentAttempt(
+		c.Request.Context(),
+		businessIDString,
+		attemptID,
+	)
+	if err != nil {
+		writePaymentError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, attempt)
+}
+
+func writePaymentError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrInvoiceNotFound),
+		errors.Is(err, service.ErrPaymentAttemptNotFound):
+		httperr.NotFound(c, err.Error())
+
+	case errors.Is(err, service.ErrInvoiceNotOwned),
+		errors.Is(err, service.ErrPaymentAttemptNotOwned):
+		httperr.Forbidden(c, err.Error())
+
+	case errors.Is(err, service.ErrInvoiceAlreadyPaid),
+		errors.Is(err, service.ErrInvoiceVoid),
+		errors.Is(err, service.ErrInvoiceUncollectible),
+		errors.Is(err, service.ErrPaymentInProgress),
+		errors.Is(err, service.ErrIdempotencyConflict):
+		httperr.Conflict(c, err.Error())
+
+	default:
+		httperr.Internal(c)
+	}
 }

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,6 +15,8 @@ import (
 	"github.com/AswinPopy/dodo-payment-gateway/internal/psp"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/repository"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/service"
+	"github.com/AswinPopy/dodo-payment-gateway/internal/webhook"
+	"github.com/AswinPopy/dodo-payment-gateway/internal/worker"
 )
 
 func main() {
@@ -24,6 +28,14 @@ func main() {
 	}
 	defer db.Close()
 
+	migrationsPath := os.Getenv("MIGRATIONS_PATH")
+	if migrationsPath == "" {
+		migrationsPath = "migrations"
+	}
+	if err := database.RunMigrations(ctx, db, migrationsPath); err != nil {
+		log.Fatal(err)
+	}
+
 	// Repository
 	businessRepo := repository.NewBusinessRepository(db)
 	customerRepo := repository.NewCustomerRepository(db)
@@ -31,7 +43,19 @@ func main() {
 	invoiceRepo := repository.NewInvoiceRepository(db)
 	paymentAttemptRepo := repository.NewPaymentAttemptRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	mockPSP := psp.NewMockPSP()
+	webhookEventRepo := repository.NewWebhookEventRepository(db)
+	outboundEventRepo := repository.NewOutboundEventRepository(db)
+
+	pspURL := os.Getenv("PSP_BASE_URL")
+	if pspURL == "" {
+		pspURL = "http://localhost:8081"
+	}
+	pspClient := psp.NewHTTPClient(pspURL)
+
+	pspWebhookSecret := os.Getenv("PSP_WEBHOOK_SECRET")
+	if pspWebhookSecret == "" {
+		pspWebhookSecret = webhook.DefaultPSPSecret
+	}
 
 	// Service
 	businessService := service.NewBusinessService(businessRepo)
@@ -47,10 +71,18 @@ func main() {
 	)
 
 	paymentService := service.NewPaymentService(
+		db,
 		invoiceRepo,
 		paymentAttemptRepo,
 		idempotencyRepo,
-		mockPSP,
+		webhookEventRepo,
+		outboundEventRepo,
+		pspWebhookSecret,
+		pspClient,
+	)
+	webhookService := service.NewWebhookService(
+		businessRepo,
+		outboundEventRepo,
 	)
 
 	// Handler
@@ -59,8 +91,16 @@ func main() {
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	invoiceHandler := handler.NewInvoiceHandler(invoiceService)
 	paymentHandler := handler.NewPaymentHandler(paymentService)
+	webhookHandler := handler.NewWebhookHandler(paymentService, webhookService)
 
-	router := gin.Default()
+	go worker.NewWebhookDispatcher(
+		businessRepo,
+		outboundEventRepo,
+	).Run(ctx)
+
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(middleware.RequestLogger())
 
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -74,11 +114,35 @@ func main() {
 		middleware.APIKeyAuth(apiKeyRepo),
 		customerHandler.CreateCustomer,
 	)
-	router.POST("/api-keys", apiKeyHandler.CreateAPIKey)
+	router.POST(
+		"/api-keys",
+		middleware.OptionalAPIKeyAuth(apiKeyRepo),
+		apiKeyHandler.CreateAPIKey,
+	)
+	router.GET(
+		"/api-keys",
+		middleware.APIKeyAuth(apiKeyRepo),
+		apiKeyHandler.ListAPIKeys,
+	)
+	router.POST(
+		"/api-keys/:id/revoke",
+		middleware.APIKeyAuth(apiKeyRepo),
+		apiKeyHandler.RevokeAPIKey,
+	)
+	router.POST(
+		"/api-keys/:id/rotate",
+		middleware.APIKeyAuth(apiKeyRepo),
+		apiKeyHandler.RotateAPIKey,
+	)
 	router.POST(
 		"/invoices",
 		middleware.APIKeyAuth(apiKeyRepo),
 		invoiceHandler.CreateInvoice,
+	)
+	router.GET(
+		"/invoices/:id",
+		middleware.APIKeyAuth(apiKeyRepo),
+		invoiceHandler.GetInvoice,
 	)
 
 	router.POST(
@@ -86,20 +150,37 @@ func main() {
 		middleware.APIKeyAuth(apiKeyRepo),
 		paymentHandler.PayInvoice,
 	)
+	router.GET(
+		"/payment-attempts/:id",
+		middleware.APIKeyAuth(apiKeyRepo),
+		paymentHandler.GetPaymentAttempt,
+	)
 
+	router.POST(
+		"/webhook-endpoint",
+		middleware.APIKeyAuth(apiKeyRepo),
+		webhookHandler.SetEndpoint,
+	)
+	router.GET(
+		"/events",
+		middleware.APIKeyAuth(apiKeyRepo),
+		webhookHandler.ListEvents,
+	)
+	router.GET(
+		"/events/:id",
+		middleware.APIKeyAuth(apiKeyRepo),
+		webhookHandler.GetEvent,
+	)
+	router.POST(
+		"/events/:id/redeliver",
+		middleware.APIKeyAuth(apiKeyRepo),
+		webhookHandler.RedeliverEvent,
+	)
+
+	router.POST("/webhooks/psp", webhookHandler.HandlePSPWebhook)
+
+	slog.Info("invoice api listening", "addr", ":8080")
 	if err := router.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
 }
-
-//ba649d53-a762-4920-9bc9-60338979e3b6 | aa1e5c14-0fcc-46be-85f6-7c5262c03087 | 9ae51207d033826f9354a2a7a40e503d018ef182bb3d788eadd3d775d3e4d0db | 2026-09-05 09:14:45.340677+00 |
-
-//curl -X POST http://localhost:8080/customers \
-//   -H "Content-Type: application/json" \
-//   -H "Authorization: Bearer 34e9556d6428ee04d62bbbe38fbbb9366485dab5c1f5f2fbcd189dfb23a73c2d" \
-//   -d '{
-//     "business_id": " aa1e5c14-0fcc-46be-85f6-7c5262c03087",
-//     "name": "Jane Doe",
-//     "email": "jane@example.com"
-//   }'
-//dodo_live_f82f4df1770fbcf43f3215423388bbb99a53dfe22851809aa5235a56c89f2487

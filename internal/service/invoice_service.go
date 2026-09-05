@@ -87,3 +87,20 @@ func (s *InvoiceService) CreateInvoice(
 
 	return invoice, nil
 }
+
+func (s *InvoiceService) GetInvoice(
+	ctx context.Context,
+	businessID string,
+	invoiceID string,
+) (*model.Invoice, error) {
+	invoice, err := s.invoiceRepo.GetByID(ctx, invoiceID)
+	if err != nil {
+		return nil, errors.New("invoice not found")
+	}
+
+	if invoice.BusinessID != businessID {
+		return nil, errors.New("invoice does not belong to business")
+	}
+
+	return invoice, nil
+}
