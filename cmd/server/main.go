@@ -10,6 +10,7 @@ import (
 	"github.com/AswinPopy/dodo-payment-gateway/internal/database"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/handler"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/middleware"
+	"github.com/AswinPopy/dodo-payment-gateway/internal/psp"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/repository"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/service"
 )
@@ -28,6 +29,9 @@ func main() {
 	customerRepo := repository.NewCustomerRepository(db)
 	apiKeyRepo := repository.NewAPIKeyRepository(db)
 	invoiceRepo := repository.NewInvoiceRepository(db)
+	paymentAttemptRepo := repository.NewPaymentAttemptRepository(db)
+	idempotencyRepo := repository.NewIdempotencyRepository(db)
+	mockPSP := psp.NewMockPSP()
 
 	// Service
 	businessService := service.NewBusinessService(businessRepo)
@@ -42,11 +46,20 @@ func main() {
 		customerRepo,
 	)
 
+	paymentService := service.NewPaymentService(
+		invoiceRepo,
+		paymentAttemptRepo,
+		idempotencyRepo,
+		mockPSP,
+	)
+
 	// Handler
 	businessHandler := handler.NewBusinessHandler(businessService)
 	customerHandler := handler.NewCustomerHandler(customerService)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	invoiceHandler := handler.NewInvoiceHandler(invoiceService)
+	paymentHandler := handler.NewPaymentHandler(paymentService)
+
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
@@ -67,6 +80,13 @@ func main() {
 		middleware.APIKeyAuth(apiKeyRepo),
 		invoiceHandler.CreateInvoice,
 	)
+
+	router.POST(
+		"/invoices/:id/pay",
+		middleware.APIKeyAuth(apiKeyRepo),
+		paymentHandler.PayInvoice,
+	)
+
 	if err := router.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
