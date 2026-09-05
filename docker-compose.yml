@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dodo-postgres
+    environment:
+      POSTGRES_USER: dodo
+      POSTGRES_PASSWORD: dodo
+      POSTGRES_DB: dodo_payments
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
