@@ -45,3 +45,5 @@ func (h *BusinessHandler) CreateBusiness(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, business)
 }
+
+//aa1e5c14-0fcc-46be-85f6-7c5262c03087

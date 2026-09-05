@@ -42,3 +42,35 @@ func (r *CustomerRepository) Create(
 		customer.Email,
 	).Scan(&customer.CreatedAt)
 }
+
+func (r *CustomerRepository) GetByID(
+	ctx context.Context,
+	id string,
+) (*model.Customer, error) {
+	query := `
+		SELECT
+			id,
+			business_id,
+			name,
+			email,
+			created_at
+		FROM customers
+		WHERE id = $1
+	`
+
+	customer := &model.Customer{}
+
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&customer.ID,
+		&customer.BusinessID,
+		&customer.Name,
+		&customer.Email,
+		&customer.CreatedAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return customer, nil
+}

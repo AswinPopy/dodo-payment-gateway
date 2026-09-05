@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/AswinPopy/dodo-payment-gateway/internal/middleware"
 	"github.com/AswinPopy/dodo-payment-gateway/internal/service"
 )
 
@@ -19,9 +20,8 @@ func NewCustomerHandler(service *service.CustomerService) *CustomerHandler {
 }
 
 type createCustomerRequest struct {
-	BusinessID string `json:"business_id" binding:"required"`
-	Name       string `json:"name" binding:"required"`
-	Email      string `json:"email" binding:"required,email"`
+	Name  string `json:"name" binding:"required"`
+	Email string `json:"email" binding:"required,email"`
 }
 
 func (h *CustomerHandler) CreateCustomer(c *gin.Context) {
@@ -33,10 +33,24 @@ func (h *CustomerHandler) CreateCustomer(c *gin.Context) {
 		})
 		return
 	}
+	businessID, exists := c.Get(middleware.BusinessIDKey)
+	businessIDString, ok := businessID.(string)
 
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "invalid business context",
+		})
+		return
+	}
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "business context missing",
+		})
+		return
+	}
 	customer, err := h.service.CreateCustomer(
 		c.Request.Context(),
-		req.BusinessID,
+		businessIDString,
 		req.Name,
 		req.Email,
 	)
