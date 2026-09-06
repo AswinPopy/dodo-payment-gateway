@@ -1,0 +1,798 @@
+openapi: 3.0.3
+info:
+  title: Dodo Payment Gateway
+  version: 1.0.0
+  description: |
+    Invoice API on port 8080. The mock PSP is a separate process on 8081.
+
+    Amounts are integers in minor units (cents). Never send floats.
+
+    **Auth:** `Authorization: Bearer <api_key>` on every business-scoped route.
+    The first API key for a business can be created without a Bearer token.
+    After that, key create/list/revoke/rotate require auth.
+
+    **Idempotency:** `POST /invoices/{id}/pay` requires `Idempotency-Key`.
+    Keys are unique per business. Reusing a key with a different invoice or
+    `card_token` returns 409.
+
+    **Errors:** every failure uses `{ "error": "<message>" }`.
+    HTTP 500 is always `{ "error": "internal server error" }`.
+
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: Health
+  - name: Businesses
+  - name: API keys
+  - name: Customers
+  - name: Invoices
+  - name: Payments
+  - name: Webhooks
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /businesses:
+    post:
+      tags: [Businesses]
+      summary: Create a business
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBusinessRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Business"
+        "400":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /api-keys:
+    post:
+      tags: [API keys]
+      summary: Create an API key
+      description: |
+        Without Bearer, allowed only if the business has no active key
+        (`business_id` required). With Bearer, creates another key for
+        the authenticated business. The secret `api_key` is returned once.
+      security:
+        - {}
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateAPIKeyResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [API keys]
+      summary: List API keys
+      description: Prefix and metadata only. Secret is never returned.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+        "401":
+          $ref: "#/components/responses/Error"
+
+  /api-keys/{id}/revoke:
+    post:
+      tags: [API keys]
+      summary: Revoke an API key
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKey"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /api-keys/{id}/rotate:
+    post:
+      tags: [API keys]
+      summary: Rotate an API key
+      description: Creates a new key, revokes the old one, returns the new secret once.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateAPIKeyResponse"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Create a customer
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerRequest"
+            example:
+              name: Ada Lovelace
+              email: ada@example.com
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /invoices:
+    post:
+      tags: [Invoices]
+      summary: Create an invoice
+      description: Starts in DRAFT. `amount` is cents and must be greater than 0.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvoiceRequest"
+            example:
+              customer_id: 11111111-1111-1111-1111-111111111111
+              currency: USD
+              amount: 1000
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /invoices/{id}:
+    get:
+      tags: [Invoices]
+      summary: Get an invoice
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /invoices/{id}/pay:
+    post:
+      tags: [Payments]
+      summary: Pay an invoice
+      description: |
+        `card_token` is forwarded to the mock PSP:
+
+        | token | result |
+        |---|---|
+        | tok_success | SUCCEEDED, invoice PAID |
+        | tok_card_declined | FAILED, code card_declined |
+        | tok_insufficient_funds | FAILED, code insufficient_funds |
+        | tok_timeout | PENDING after ~2s (PSP sleeps 30s) |
+        | tok_network_error | PENDING (PSP returns 500) |
+
+        Timeout and network errors do not mark the attempt FAILED.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PayInvoiceRequest"
+            examples:
+              success:
+                value:
+                  card_token: tok_success
+              declined:
+                value:
+                  card_token: tok_card_declined
+      responses:
+        "200":
+          description: Attempt recorded (SUCCEEDED, FAILED, or PENDING)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentAttempt"
+              examples:
+                succeeded:
+                  value:
+                    id: 22222222-2222-2222-2222-222222222222
+                    invoice_id: 33333333-3333-3333-3333-333333333333
+                    business_id: 44444444-4444-4444-4444-444444444444
+                    amount: 1000
+                    currency: USD
+                    status: SUCCEEDED
+                    psp_transaction_id: 4a384d01-7eb3-44f8-be99-63258335a749
+                    created_at: "2026-09-06T09:06:24.683158+05:30"
+                    updated_at: "2026-09-06T09:06:24.683158+05:30"
+                failed:
+                  value:
+                    id: 22222222-2222-2222-2222-222222222222
+                    invoice_id: 33333333-3333-3333-3333-333333333333
+                    business_id: 44444444-4444-4444-4444-444444444444
+                    amount: 2500
+                    currency: USD
+                    status: FAILED
+                    failure_code: card_declined
+                    created_at: "2026-09-06T09:06:24.683158+05:30"
+                    updated_at: "2026-09-06T09:06:24.683158+05:30"
+                pending:
+                  value:
+                    id: 22222222-2222-2222-2222-222222222222
+                    invoice_id: 33333333-3333-3333-3333-333333333333
+                    business_id: 44444444-4444-4444-4444-444444444444
+                    amount: 4000
+                    currency: USD
+                    status: PENDING
+                    created_at: "2026-09-06T09:06:24.683158+05:30"
+                    updated_at: "2026-09-06T09:06:24.683158+05:30"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /payment-attempts/{id}:
+    get:
+      tags: [Payments]
+      summary: Get a payment attempt
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentAttempt"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /webhook-endpoint:
+    post:
+      tags: [Webhooks]
+      summary: Set the merchant webhook URL
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  example: https://merchant.example/webhooks
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook_url:
+                    type: string
+                  webhook_secret:
+                    type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+
+  /events:
+    get:
+      tags: [Webhooks]
+      summary: List outbound events
+      description: Cursor with `after` (event id). Use this to reconcile missed deliveries.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: after
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutboundEvent"
+        "401":
+          $ref: "#/components/responses/Error"
+
+  /events/{id}:
+    get:
+      tags: [Webhooks]
+      summary: Get one outbound event
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundEvent"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /events/{id}/redeliver:
+    post:
+      tags: [Webhooks]
+      summary: Queue an event for redelivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundEvent"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /webhooks/psp:
+    post:
+      tags: [Webhooks]
+      summary: Inbound PSP webhook
+      description: |
+        Called by the mock PSP. Not a merchant route.
+
+        Signed as HMAC-SHA256 of `event_id.unix_timestamp.raw_body`.
+        Headers: `Webhook-Id`, `Webhook-Timestamp`, `Webhook-Signature` (`v1=<hex>`).
+        Timestamps older than 5 minutes are rejected. Duplicate `event_id` is ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PSPWebhook"
+      responses:
+        "200":
+          description: Received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+                    example: true
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Error:
+      description: |
+        Consistent error body for 400, 401, 403, 404, 409, and 500.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            badRequest:
+              value:
+                error: card_token is required
+            unauthorized:
+              value:
+                error: invalid API key
+            conflict:
+              value:
+                error: invoice already paid
+            internal:
+              value:
+                error: internal server error
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable message. 500 is always "internal server error".
+      example:
+        error: invoice already paid
+
+    CreateBusinessRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: Acme
+
+    Business:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        webhook_url:
+          type: string
+        webhook_secret:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateAPIKeyRequest:
+      type: object
+      properties:
+        business_id:
+          type: string
+          format: uuid
+          description: Required when unauthenticated (first key).
+        name:
+          type: string
+
+    CreateAPIKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        key_prefix:
+          type: string
+          example: dodo_live_a1b2c3d4
+        api_key:
+          type: string
+          description: Full secret. Shown only on create or rotate.
+        created_at:
+          type: string
+          format: date-time
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        key_prefix:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+
+    RotateAPIKeyResponse:
+      type: object
+      properties:
+        api_key:
+          type: string
+        created:
+          $ref: "#/components/schemas/CreateAPIKeyResponse"
+        revoked:
+          $ref: "#/components/schemas/APIKey"
+
+    CreateCustomerRequest:
+      type: object
+      required: [name, email]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateInvoiceRequest:
+      type: object
+      required: [customer_id, currency, amount]
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          example: USD
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Minor units (cents)
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [DRAFT, OPEN, PAID, VOID, UNCOLLECTIBLE]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PayInvoiceRequest:
+      type: object
+      required: [card_token]
+      properties:
+        card_token:
+          type: string
+          enum:
+            - tok_success
+            - tok_card_declined
+            - tok_insufficient_funds
+            - tok_timeout
+            - tok_network_error
+
+    PaymentAttempt:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        invoice_id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, SUCCEEDED, FAILED]
+        psp_transaction_id:
+          type: string
+        failure_code:
+          type: string
+          example: card_declined
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OutboundEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        source_id:
+          type: string
+        event_type:
+          type: string
+          enum: [payment.succeeded, payment.failed]
+        payload:
+          type: object
+        status:
+          type: string
+          enum: [PENDING, DELIVERING, DELIVERED, FAILED]
+        attempt_count:
+          type: integer
+        next_retry_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: string
+          format: date-time
+
+    PSPWebhook:
+      type: object
+      required: [event_id, event_type]
+      properties:
+        event_id:
+          type: string
+        event_type:
+          type: string
+          example: charge.succeeded
+        data:
+          type: object
+          properties:
+            psp_ref:
+              type: string
+            idempotency_key:
+              type: string
+              description: Payment attempt id
+            status:
+              type: string
+            code:
+              type: string

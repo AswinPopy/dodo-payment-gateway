@@ -1,0 +1,92 @@
+# Create a new business and return its BUSINESS_ID
+
+curl -X POST http://localhost:8080/businesses \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Demo Business"}'
+
+
+# Save the returned business ID for later requests
+export BUSINESS_ID="your-business-id"
+
+----------------------------------------------------
+
+# Create an API key for the business
+curl -X POST http://localhost:8080/api-keys \
+  -H "Content-Type: application/json" \
+  -d "{\"business_id\":\"$BUSINESS_ID\"}"
+
+# Save the returned API key for authenticated requests
+export API_KEY="dodo_live_your-key"
+
+
+----------------------------------------------------
+
+
+# Create a customer under the authenticated business
+curl -X POST http://localhost:8080/customers \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"Demo Customer",
+    "email":"demo@example.com"
+  }'
+
+# Save the returned customer ID
+export CUSTOMER_ID="customer-id"
+
+----------------------------------------------------
+
+
+# Create a $100 USD invoice for the customer
+# Amount is represented in cents: 10000 = $100.00
+curl -X POST http://localhost:8080/invoices \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"customer_id\":\"$CUSTOMER_ID\",
+    \"amount\":10000,
+    \"currency\":\"USD\"
+  }"
+
+  # Save the returned invoice ID
+export INVOICE_ID="invoice-id"
+
+  ----------------------------------------------------
+
+
+# Attempt payment using the mock PSP's successful test token
+# The idempotency key makes this payment request safely repeatable
+curl -X POST "http://localhost:8080/invoices/$INVOICE_ID/pay" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-payment-success-001" \
+  -d '{"card_token":"tok_success"}'
+
+----------------------------------------------------
+
+# Create another $50 USD invoice to demonstrate a failed payment
+curl -X POST http://localhost:8080/invoices \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"customer_id\":\"$CUSTOMER_ID\",
+    \"amount\":5000,
+    \"currency\":\"USD\"
+  }"
+
+
+  # Save the new invoice ID
+export FAILED_INVOICE_ID="new-invoice-id"
+
+
+----------------------------------------------------
+
+# Attempt payment using the mock PSP's card-declined test token
+# The payment attempt should become FAILED while the invoice stays OPEN
+curl -X POST "http://localhost:8080/invoices/$FAILED_INVOICE_ID/pay" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-payment-failed-001" \
+  -d '{"card_token":"tok_card_declined"}'
+
+  

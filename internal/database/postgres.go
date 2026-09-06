@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const defaultDSN = "postgres://dodo:dodo@localhost:5432/dodo_payments?sslmode=disable"
+const defaultDSN = "postgres://dodo:dodo@localhost:5433/dodo_payments?sslmode=disable"
 
 func NewPostgresPool(ctx context.Context) (*pgxpool.Pool, error) {
 	dsn := os.Getenv("DATABASE_URL")
